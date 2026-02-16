@@ -10,7 +10,7 @@ Key differences from PyTorch version:
 - Single device (Apple Silicon unified memory)
 
 Loads a pretrained base model checkpoint and fine-tunes on an SFT data mixture
-(SmolTalk, MMLU, GSM8K, CustomJSON, SpellingBee, SimpleSpelling).
+(SmolTalk, MMLU, GSM8K, SpellingBee, SimpleSpelling).
 
 Uses BOS-aligned bestfit packing with padding (targets masked with -1).
 LR schedule: constant for 80%, then linear ramp to 0.
@@ -38,7 +38,7 @@ from tasks.common import TaskMixture
 from tasks.gsm8k import GSM8K
 from tasks.mmlu import MMLU
 from tasks.smoltalk import SmolTalk
-from tasks.customjson import CustomJSON
+
 from tasks.spellingbee import SimpleSpelling, SpellingBee
 
 
@@ -70,9 +70,8 @@ def sft_data_generator_bos_bestfit(tokenizer, B, T, split, buffer_size=100):
         ("SmolTalk", SmolTalk(split=split)),
         ("MMLU", MMLU(split="auxiliary_train" if split == "train" else "test")),
         ("GSM8K", GSM8K(split="train" if split == "train" else "test")),
-        ("CustomJSON", CustomJSON(split=split)),
-        ("SpellingBee", SpellingBee(split=split)),
-        ("SimpleSpelling", SimpleSpelling(split=split)),
+        ("SpellingBee", SpellingBee()),
+        ("SimpleSpelling", SimpleSpelling()),
     ]
     mixture = TaskMixture(tasks, seed=42)
     total_examples = len(mixture)
@@ -310,9 +309,8 @@ def main():
             ("SmolTalk", SmolTalk(split="train")),
             ("MMLU", MMLU(split="auxiliary_train")),
             ("GSM8K", GSM8K(split="train")),
-            ("CustomJSON", CustomJSON(split="train")),
-            ("SpellingBee", SpellingBee(split="train")),
-            ("SimpleSpelling", SimpleSpelling(split="train")),
+            ("SpellingBee", SpellingBee()),
+            ("SimpleSpelling", SimpleSpelling()),
         ]
         tmp_mixture = TaskMixture(tmp_tasks, seed=42)
         total_conversations = len(tmp_mixture)
