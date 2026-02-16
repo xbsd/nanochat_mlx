@@ -67,7 +67,7 @@ def sft_data_generator_bos_bestfit(tokenizer, B, T, split, buffer_size=100):
     """
     # Build the SFT task mixture
     tasks = [
-        ("SmolTalk", SmolTalk(split=split)),
+        ("SmolTalk", SmolTalk(split="train" if split == "train" else "test")),
         ("MMLU", MMLU(split="auxiliary_train" if split == "train" else "test")),
         ("GSM8K", GSM8K(split="train" if split == "train" else "test")),
         ("SpellingBee", SpellingBee()),
@@ -468,7 +468,7 @@ def main():
                 })
 
         # ---- Save checkpoint ----
-        if step % args.save_every == 0 or last_step:
+        if args.save_every > 0 and (step % args.save_every == 0 or last_step):
             ckpt_dir = os.path.join(args.output_dir, f"step_{step:06d}")
             print0(f"Saving checkpoint to {ckpt_dir}")
             save_checkpoint(

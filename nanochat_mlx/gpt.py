@@ -31,7 +31,7 @@ from nanochat_mlx.common import print0
 @dataclass
 class GPTConfig:
     sequence_len: int = 2048
-    vocab_size: int = 32768
+    vocab_size: int = 65536
     n_layer: int = 12
     n_head: int = 6
     n_kv_head: int = 6
