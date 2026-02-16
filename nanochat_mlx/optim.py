@@ -160,7 +160,8 @@ def _polar_express(X: mx.array, ns_steps: int) -> mx.array:
     batch of matrices.  The routine chooses tall-vs-wide orientation
     automatically so that the Gram matrix is as small as possible.
     """
-    X = X.astype(mx.bfloat16)
+    orig_dtype = X.dtype
+    X = X.astype(mx.float32)
     # Normalise each matrix in the batch
     norms = mx.linalg.norm(X, axis=(-2, -1), keepdims=True)
     X = X / (norms * 1.02 + 1e-6)
@@ -177,7 +178,7 @@ def _polar_express(X: mx.array, ns_steps: int) -> mx.array:
             B = b * A + c * (A @ A)
             X = a * X + B @ X
 
-    return X
+    return X.astype(orig_dtype)
 
 
 def _muon_step(

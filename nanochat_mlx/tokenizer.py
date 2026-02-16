@@ -335,23 +335,16 @@ def get_tokenizer():
 def get_token_bytes():
     """
     Compute token_bytes array for BPB evaluation.
-    Returns a list of byte lengths for each token ID.
+    Returns an mlx array of byte lengths for each token ID, derived from the tokenizer.
     """
     import mlx.core as mx
-    from nanochat_mlx.common import get_base_dir
-    import numpy as np
-    base_dir = get_base_dir()
-    tokenizer_dir = os.path.join(base_dir, "tokenizer")
-    token_bytes_path = os.path.join(tokenizer_dir, "token_bytes.pt")
-    if os.path.exists(token_bytes_path):
-        # Load from the original torch format using numpy
-        import torch
-        with open(token_bytes_path, "rb") as f:
-            tb = torch.load(f, map_location="cpu")
-        return mx.array(tb.numpy(), dtype=mx.int32)
-    # If the .pt file doesn't exist, try .npz
-    npz_path = os.path.join(tokenizer_dir, "token_bytes.npz")
-    if os.path.exists(npz_path):
-        data = np.load(npz_path)
-        return mx.array(data["token_bytes"], dtype=mx.int32)
-    raise FileNotFoundError(f"Token bytes not found at {token_bytes_path} or {npz_path}")
+    tokenizer = get_tokenizer()
+    vocab_size = tokenizer.get_vocab_size()
+    lengths = []
+    for i in range(vocab_size):
+        try:
+            raw = tokenizer.enc.decode_single_token_bytes(i)
+            lengths.append(len(raw))
+        except Exception:
+            lengths.append(0)
+    return mx.array(lengths, dtype=mx.int32)

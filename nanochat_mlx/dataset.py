@@ -11,9 +11,9 @@ import os
 import argparse
 import hashlib
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import pyarrow.parquet as pq
-from multiprocessing import Pool
 from tqdm import tqdm
 
 from nanochat_mlx.common import get_base_dir
@@ -194,13 +194,13 @@ if __name__ == "__main__":
     print(f"Downloading up to {len(ids_to_download)} shards using {args.num_workers} workers...")
     print(f"Target directory: {DATA_DIR}")
     print()
-    with Pool(processes=args.num_workers) as pool:
-        results = list(tqdm(
-            pool.imap_unordered(download_single_file, ids_to_download),
-            total=len(ids_to_download),
-            desc="Shards",
-            unit="file",
-        ))
+    results = []
+    with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
+        futures = {executor.submit(download_single_file, i): i for i in ids_to_download}
+        with tqdm(total=len(futures), desc="Shards", unit="file") as pbar:
+            for future in as_completed(futures):
+                results.append(future.result())
+                pbar.update(1)
 
     # Report results
     successful = sum(1 for success in results if success)

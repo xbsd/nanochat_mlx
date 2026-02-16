@@ -90,7 +90,8 @@ def save_checkpoint(
         for name, state_dict in optimizer.state.items():
             for key, val in state_dict.items():
                 if isinstance(val, mx.array):
-                    opt_arrays[f"{name}@@{key}"] = np.array(val)
+                    arr = val.astype(mx.float32) if val.dtype == mx.bfloat16 else val
+                    opt_arrays[f"{name}@@{key}"] = np.array(arr)
         if opt_arrays:
             np.savez(opt_path, **opt_arrays)
         # Also save step count
