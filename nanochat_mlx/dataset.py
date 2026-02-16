@@ -9,10 +9,12 @@ For details of how the dataset was prepared, see `repackage_data_reference.py`.
 
 import os
 import argparse
+import hashlib
 import time
 import requests
 import pyarrow.parquet as pq
 from multiprocessing import Pool
+from tqdm import tqdm
 
 from nanochat_mlx.common import get_base_dir
 
@@ -57,19 +59,87 @@ def parquets_iter_batched(split, start=0, step=1):
             yield texts
 
 # -----
+# Tokenizer artifacts needed before training can begin
+
+TOKENIZER_BASE_URL = "https://huggingface.co/karpathy/nanochat-d32/resolve/main"
+TOKENIZER_DIR = os.path.join(base_dir, "tokenizer")
+TOKENIZER_FILES = {
+    "tokenizer.pkl": "33f28610ffd37a57d6631f8d7bd91929bd877ae3f4a87dcbdff00b07f6bd7cc3",
+    "token_bytes.pt": "e280877820a90174f3b47bf797b67b9026cd859b7d6d5b7f78e64bcdaca126b4",
+}
+
+
+def _sha256(path):
+    """Compute SHA-256 hex digest of a file."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def download_tokenizer():
+    """Download tokenizer artifacts if missing or corrupted (checksum mismatch)."""
+    os.makedirs(TOKENIZER_DIR, exist_ok=True)
+
+    needed = []
+    for filename, expected_sha in TOKENIZER_FILES.items():
+        filepath = os.path.join(TOKENIZER_DIR, filename)
+        if os.path.exists(filepath) and _sha256(filepath) == expected_sha:
+            continue
+        needed.append(filename)
+
+    if not needed:
+        return
+
+    print("Downloading tokenizer files...")
+    for filename in needed:
+        filepath = os.path.join(TOKENIZER_DIR, filename)
+        expected_sha = TOKENIZER_FILES[filename]
+        if os.path.exists(filepath):
+            print(f"  {filename}: checksum mismatch, re-downloading...")
+        else:
+            print(f"  Downloading {filename}...")
+        url = f"{TOKENIZER_BASE_URL}/{filename}"
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+                temp_path = filepath + ".tmp"
+                with open(temp_path, 'wb') as f:
+                    f.write(response.content)
+                actual_sha = _sha256(temp_path)
+                if actual_sha != expected_sha:
+                    os.remove(temp_path)
+                    raise RuntimeError(
+                        f"Checksum mismatch for {filename}: "
+                        f"expected {expected_sha[:16]}..., got {actual_sha[:16]}..."
+                    )
+                os.rename(temp_path, filepath)
+                print(f"  Saved {filename} ({os.path.getsize(filepath) // 1024}KB)")
+                break
+            except (requests.RequestException, IOError) as e:
+                if attempt < max_attempts:
+                    print(f"  Attempt {attempt}/{max_attempts} failed: {e}, retrying...")
+                    time.sleep(2 ** attempt)
+                else:
+                    raise RuntimeError(f"Failed to download {filename} from {url}") from e
+    print(f"Tokenizer ready at {TOKENIZER_DIR}")
+
+
+# -----
 def download_single_file(index):
-    """Downloads a single file index, with some backoff."""
+    """Downloads a single file index, with progress bar and backoff."""
 
     # Construct the local filepath for this file and skip if it already exists
     filename = index_to_filename(index)
     filepath = os.path.join(DATA_DIR, filename)
     if os.path.exists(filepath):
-        print(f"Skipping {filepath} (already exists)")
         return True
 
     # Construct the remote URL for this file
     url = f"{BASE_URL}/{filename}"
-    print(f"Downloading {filename}...")
 
     # Download with retries
     max_attempts = 5
@@ -77,33 +147,31 @@ def download_single_file(index):
         try:
             response = requests.get(url, stream=True, timeout=30)
             response.raise_for_status()
-            # Write to temporary file first
-            temp_path = filepath + f".tmp"
-            with open(temp_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):  # 1MB chunks
+            total_size = int(response.headers.get("content-length", 0))
+            temp_path = filepath + ".tmp"
+            with open(temp_path, 'wb') as f, \
+                 tqdm(total=total_size, unit="B", unit_scale=True,
+                      desc=filename, leave=False) as pbar:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         f.write(chunk)
+                        pbar.update(len(chunk))
             # Move temp file to final location
             os.rename(temp_path, filepath)
-            print(f"Successfully downloaded {filename}")
             return True
 
         except (requests.RequestException, IOError) as e:
-            print(f"Attempt {attempt}/{max_attempts} failed for {filename}: {e}")
             # Clean up any partial files
-            for path in [filepath + f".tmp", filepath]:
+            for path in [filepath + ".tmp", filepath]:
                 if os.path.exists(path):
                     try:
                         os.remove(path)
                     except:
                         pass
-            # Try a few times with exponential backoff: 2^attempt seconds
             if attempt < max_attempts:
-                wait_time = 2 ** attempt
-                print(f"Waiting {wait_time} seconds before retry...")
-                time.sleep(wait_time)
+                time.sleep(2 ** attempt)
             else:
-                print(f"Failed to download {filename} after {max_attempts} attempts")
+                tqdm.write(f"Failed to download {filename} after {max_attempts} attempts")
                 return False
 
     return False
@@ -117,14 +185,23 @@ if __name__ == "__main__":
                         help="Number of parallel download workers (default: 4)")
     args = parser.parse_args()
 
+    # Always ensure tokenizer is available first
+    download_tokenizer()
+    print()
+
     num = MAX_SHARD + 1 if args.num_files == -1 else min(args.num_files, MAX_SHARD + 1)
     ids_to_download = list(range(num))
-    print(f"Downloading {len(ids_to_download)} shards using {args.num_workers} workers...")
+    print(f"Downloading up to {len(ids_to_download)} shards using {args.num_workers} workers...")
     print(f"Target directory: {DATA_DIR}")
     print()
     with Pool(processes=args.num_workers) as pool:
-        results = pool.map(download_single_file, ids_to_download)
+        results = list(tqdm(
+            pool.imap_unordered(download_single_file, ids_to_download),
+            total=len(ids_to_download),
+            desc="Shards",
+            unit="file",
+        ))
 
     # Report results
     successful = sum(1 for success in results if success)
-    print(f"Done! Downloaded: {successful}/{len(ids_to_download)} shards to {DATA_DIR}")
+    print(f"Done! {successful}/{len(ids_to_download)} shards ready in {DATA_DIR}")

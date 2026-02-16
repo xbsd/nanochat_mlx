@@ -113,7 +113,7 @@ This runs 7 verification stages:
 
 ### 2. Download Data
 
-Download FineWeb-Edu parquet shards for pretraining:
+Download FineWeb-Edu parquet shards for pretraining. This also downloads the tokenizer files (`tokenizer.pkl`, `token_bytes.pt`) automatically:
 
 ```bash
 # Download 4 shards for a quick test (~400MB each)
@@ -123,7 +123,7 @@ python -m nanochat_mlx.dataset -n 4
 python -m nanochat_mlx.dataset -n 100 -w 16
 ```
 
-Data is stored in `~/.cache/nanochat/base_data/` by default. Set `NANOCHAT_BASE_DIR` to change the location.
+Data is stored in `~/.cache/nanochat/base_data/` and tokenizer artifacts in `~/.cache/nanochat/tokenizer/` by default. Set `NANOCHAT_BASE_DIR` to change the location.
 
 ### 3. Pretrain a Base Model
 
