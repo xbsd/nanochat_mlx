@@ -203,6 +203,28 @@ python -m scripts.chat_cli \
     --max-tokens 1024
 ```
 
+### 7. Cleanup
+
+Remove all downloaded data, caches, and checkpoints when you're done:
+
+```bash
+# Show what would be deleted (no files removed)
+python -m scripts.cleanup --dry-run --all
+
+# Interactive mode — choose what to delete
+python -m scripts.cleanup
+
+# Delete everything
+python -m scripts.cleanup --all
+
+# Delete only specific categories
+python -m scripts.cleanup --data       # Training data shards
+python -m scripts.cleanup --runs       # Training run checkpoints
+python -m scripts.cleanup --tokenizer  # Tokenizer files
+python -m scripts.cleanup --sft        # Local SFT run outputs
+python -m scripts.cleanup --hf-cache   # HuggingFace datasets cache
+```
+
 ## Project Structure
 
 ```
