@@ -187,20 +187,29 @@ class MLP(nn.Module):
 # ---------------------------------------------------------------------------
 
 class Block(nn.Module):
-    def __init__(self, config: GPTConfig, layer_idx: int):
+    def __init__(self, config: GPTConfig, layer_idx: int, padded_vocab_size: int):
         super().__init__()
         self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = MLP(config)
 
+        # Value embedding (ResFormer-style) — only on alternating layers
+        if has_ve(layer_idx, config.n_layer):
+            head_dim = config.n_embd // config.n_head
+            kv_dim = config.n_kv_head * head_dim
+            self.ve = nn.Embedding(padded_vocab_size, kv_dim)
+        else:
+            self.ve = None
+
     def __call__(
         self,
         x: mx.array,
-        ve: Optional[mx.array],
+        idx: mx.array,
         cos: mx.array,
         sin: mx.array,
         additive_mask: Optional[mx.array],
         kv_cache=None,
     ) -> mx.array:
+        ve = self.ve(idx) if self.ve is not None else None
         x = x + self.attn(norm(x), ve, cos, sin, additive_mask, kv_cache)
         x = x + self.mlp(norm(x))
         return x
@@ -215,8 +224,8 @@ class GPT(nn.Module):
         super().__init__()
         self.config = config
 
-        # Compute sliding window sizes per layer
-        self.window_sizes = self._compute_window_sizes(config)
+        # Compute sliding window sizes per layer (underscore prefix to keep out of module tree)
+        self._window_sizes = self._compute_window_sizes(config)
 
         # Pad vocab for memory alignment efficiency
         self.padded_vocab_size = (
@@ -232,8 +241,8 @@ class GPT(nn.Module):
         # Token embedding
         self.wte = nn.Embedding(self.padded_vocab_size, config.n_embd)
 
-        # Transformer blocks
-        self.h = [Block(config, layer_idx) for layer_idx in range(config.n_layer)]
+        # Transformer blocks (each block owns its own value embedding if applicable)
+        self.h = [Block(config, layer_idx, self.padded_vocab_size) for layer_idx in range(config.n_layer)]
 
         # Language model head (untied from wte)
         self.lm_head = nn.Linear(config.n_embd, self.padded_vocab_size, bias=False)
@@ -242,16 +251,8 @@ class GPT(nn.Module):
         self.resid_lambdas = mx.ones((config.n_layer,))
         self.x0_lambdas = mx.zeros((config.n_layer,))
 
-        # Value embeddings (ResFormer-style) for alternating layers
-        head_dim = config.n_embd // config.n_head
-        kv_dim = config.n_kv_head * head_dim
-        self.value_embeds = {
-            str(i): nn.Embedding(self.padded_vocab_size, kv_dim)
-            for i in range(config.n_layer)
-            if has_ve(i, config.n_layer)
-        }
-
         # Precompute rotary embeddings (cache 10x the sequence length)
+        head_dim = config.n_embd // config.n_head
         self.rotary_seq_len = config.sequence_len * 10
         cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim)
         self._cos = cos
@@ -361,15 +362,15 @@ class GPT(nn.Module):
                     block.attn.ve_gate.weight
                 )
 
+            # Value embedding: uniform(-s, s)
+            if block.ve is not None:
+                block.ve.weight = mx.random.uniform(
+                    low=-s, high=s, shape=block.ve.weight.shape
+                ).astype(mx.bfloat16)
+
         # Residual lambdas
         self.resid_lambdas = mx.ones((self.config.n_layer,))
         self.x0_lambdas = mx.full((self.config.n_layer,), 0.1)
-
-        # Value embeddings: uniform(-s, s)
-        for ve in self.value_embeds.values():
-            ve.weight = mx.random.uniform(
-                low=-s, high=s, shape=ve.weight.shape
-            ).astype(mx.bfloat16)
 
         # Re-precompute rotary embeddings
         head_dim = self.config.n_embd // self.config.n_head
@@ -385,7 +386,7 @@ class GPT(nn.Module):
         # Exclude embedding-like parameters from the 6N calculation
         wte_numel = self.wte.weight.size
         value_embeds_numel = sum(
-            ve.weight.size for ve in self.value_embeds.values()
+            block.ve.weight.size for block in self.h if block.ve is not None
         )
         scalars_numel = self.resid_lambdas.size + self.x0_lambdas.size
         nparams_exclude = wte_numel + value_embeds_numel + scalars_numel
@@ -395,7 +396,7 @@ class GPT(nn.Module):
         q = self.config.n_embd // self.config.n_head
         t = self.config.sequence_len
         attn_flops = 0
-        for window in self.window_sizes:
+        for window in self._window_sizes:
             effective_seq = t if window < 0 else min(window, t)
             attn_flops += 12 * h * q * effective_seq
 
@@ -406,7 +407,7 @@ class GPT(nn.Module):
         """Return a breakdown of parameter counts by category."""
         wte = self.wte.weight.size
         value_embeds = sum(
-            ve.weight.size for ve in self.value_embeds.values()
+            block.ve.weight.size for block in self.h if block.ve is not None
         )
         lm_head = self.lm_head.weight.size
 
@@ -455,15 +456,19 @@ class GPT(nn.Module):
         lm_head_names = ["lm_head.weight"]
         embedding_names = ["wte.weight"]
         value_embed_names = [
-            f"value_embeds.{k}.weight" for k in self.value_embeds
+            f"h.{i}.ve.weight" for i, block in enumerate(self.h) if block.ve is not None
         ]
         resid_names = ["resid_lambdas"]
         x0_names = ["x0_lambdas"]
 
-        # Matrix params: everything in self.h
+        # Matrix params: everything in self.h EXCEPT value embeddings (ve.weight)
         # tree_flatten on the h subtree gives us flat (name, array) pairs
         h_params = self.parameters().get("h", [])
-        matrix_names = [f"h.{name}" for name, _ in tree_flatten(h_params)]
+        ve_name_set = set(value_embed_names)
+        matrix_names = [
+            f"h.{name}" for name, _ in tree_flatten(h_params)
+            if f"h.{name}" not in ve_name_set
+        ]
 
         # VE gate params are inside the blocks, so they are already in matrix_names
         # (they get the muon treatment along with other block parameters)
@@ -581,7 +586,7 @@ class GPT(nn.Module):
         # Build attention masks (one per unique window size, only for training)
         if kv_cache is None:
             mask_cache = {}
-            for w in self.window_sizes:
+            for w in self._window_sizes:
                 if w not in mask_cache:
                     mask_cache[w] = self._build_sliding_window_mask(T, w)
         else:
@@ -592,13 +597,10 @@ class GPT(nn.Module):
             # Per-layer residual scaling
             x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
 
-            # Value embedding lookup (only for layers that have VE)
-            ve = self.value_embeds[str(i)](idx) if str(i) in self.value_embeds else None
-
             # Get the mask for this layer's window size
-            additive_mask = mask_cache.get(self.window_sizes[i]) if kv_cache is None else None
+            additive_mask = mask_cache.get(self._window_sizes[i]) if kv_cache is None else None
 
-            x = block(x, ve, cos, sin, additive_mask, kv_cache)
+            x = block(x, idx, cos, sin, additive_mask, kv_cache)
 
         # Final norm
         x = norm(x)

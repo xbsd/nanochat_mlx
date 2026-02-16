@@ -145,9 +145,9 @@ class TestGPTModel:
 
 class TestSlidingWindow:
     def test_window_sizes_computed(self, tiny_model):
-        assert len(tiny_model.window_sizes) == tiny_model.config.n_layer
+        assert len(tiny_model._window_sizes) == tiny_model.config.n_layer
         # Last layer should always be full context
-        last_window = tiny_model.window_sizes[-1]
+        last_window = tiny_model._window_sizes[-1]
         assert last_window == tiny_model.config.sequence_len
 
     def test_pattern_sssl(self):
@@ -157,7 +157,7 @@ class TestSlidingWindow:
             window_pattern="SSSL",
         )
         model = GPT(config)
-        ws = model.window_sizes
+        ws = model._window_sizes
         assert ws[0] == 64  # S = half context
         assert ws[1] == 64  # S
         assert ws[2] == 64  # S
