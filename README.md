@@ -147,22 +147,23 @@ python -m scripts.base_train \
     --run my_base_run
 ```
 
-Checkpoints are saved to `log/<run_name>/` as `model.safetensors` + `metadata.json`.
+Checkpoints are saved to `~/.cache/nanochat/runs/<run_name>/final/` as `model.safetensors` + `metadata.json`. Set `NANOCHAT_BASE_DIR` to change the root location.
 
 ### 4. Supervised Fine-Tuning (SFT)
 
 Fine-tune the base model on a conversational data mixture (SmolTalk, MMLU, GSM8K, SpellingBee, and more):
 
 ```bash
+# Point --checkpoint at the base model you just trained:
 python -m scripts.chat_sft \
-    --checkpoint log/my_base_run/ckpt_final \
+    --checkpoint ~/.cache/nanochat/runs/my_base_run/final \
     --batch-size 4 \
     --grad-accum-steps 4 \
     --eval-every 100 \
     --save-every 500
 ```
 
-Training runs for one full epoch through the data mixture, then stops automatically.
+Training runs for one full epoch through the data mixture, then stops automatically. SFT checkpoints are saved to `./runs/chat_sft_<timestamp>/` in the current directory (use `--output-dir` to override).
 
 ### 5. Evaluate
 
@@ -170,7 +171,7 @@ Training runs for one full epoch through the data mixture, then stops automatica
 
 ```bash
 python -m scripts.base_eval \
-    --checkpoint log/my_base_run/ckpt_final \
+    --checkpoint ~/.cache/nanochat/runs/my_base_run/final \
     --tasks bpb hellaswag mmlu arc_easy arc_challenge
 ```
 
@@ -178,7 +179,7 @@ python -m scripts.base_eval \
 
 ```bash
 python -m scripts.chat_eval \
-    --checkpoint log/my_sft_run/ckpt_final \
+    --checkpoint runs/chat_sft_<timestamp>/step_NNNNNN \
     --tasks arc_easy arc_challenge mmlu gsm8k humaneval spellingbee
 ```
 
@@ -187,16 +188,16 @@ python -m scripts.chat_eval \
 ```bash
 # Interactive multi-turn chat
 python -m scripts.chat_cli \
-    --checkpoint log/my_sft_run/ckpt_final
+    --checkpoint runs/chat_sft_<timestamp>/step_NNNNNN
 
 # Single prompt
 python -m scripts.chat_cli \
-    --checkpoint log/my_sft_run/ckpt_final \
+    --checkpoint runs/chat_sft_<timestamp>/step_NNNNNN \
     --prompt "Explain the theory of relativity in simple terms."
 
 # With custom generation parameters
 python -m scripts.chat_cli \
-    --checkpoint log/my_sft_run/ckpt_final \
+    --checkpoint runs/chat_sft_<timestamp>/step_NNNNNN \
     --temperature 0.7 \
     --top-k 50 \
     --max-tokens 1024
@@ -264,7 +265,7 @@ NanoChat MLX implements a modern GPT with several architectural innovations:
 | `n_head` | 6 | Query attention heads |
 | `n_kv_head` | 6 | Key-value heads (supports GQA when < n_head) |
 | `sequence_len` | 2048 | Maximum context length |
-| `vocab_size` | 32768 | BPE vocabulary (padded to 64-boundary) |
+| `vocab_size` | 65536 | BPE vocabulary |
 | `window_pattern` | `"SSSL"` | Per-layer attention window pattern |
 
 ### Architectural Components
@@ -363,14 +364,13 @@ python -m scripts.chat_sft [OPTIONS]
 | `--wandb` | False | Enable W&B logging |
 | `--seed` | 42 | Random seed |
 
-**Data mixture (6 tasks):**
+**Data mixture (5 tasks):**
 
 | Task | Source | Purpose |
 |------|--------|---------|
 | SmolTalk | HuggingFace `smoltalk` | General conversation |
 | MMLU | `cais/mmlu` auxiliary train | Knowledge questions |
 | GSM8K | `openai/gsm8k` train | Math reasoning |
-| CustomJSON | Local JSONL files | Custom data |
 | SpellingBee | Synthetic | Letter counting |
 | SimpleSpelling | Synthetic | Word spelling |
 
@@ -539,12 +539,17 @@ Where `scale = (n_embd / 768)^-0.5` for dimension-dependent LR scaling.
 ### Directory Layout
 
 ```
-$NANOCHAT_BASE_DIR/
-├── base_data/             # FineWeb-Edu parquet shards
-├── tokenizer/             # Tokenizer artifacts (tokenizer.pkl, token_bytes.npy)
-├── base_checkpoints/      # Pretrained model checkpoints
-├── chatsft_checkpoints/   # SFT model checkpoints
-└── report.json            # Evaluation reports
+$NANOCHAT_BASE_DIR/           # Default: ~/.cache/nanochat
+├── base_data/                # FineWeb-Edu parquet shards
+├── tokenizer/                # Tokenizer artifacts (tokenizer.pkl, token_bytes.pt)
+├── runs/                     # Training run checkpoints
+│   └── <run_name>/           # e.g. my_test, my_base_run
+│       ├── config.json       # Training configuration
+│       ├── final/            # Final checkpoint (model.safetensors + metadata.json)
+│       └── step_NNNNNN/      # Intermediate checkpoints (if save-every > 0)
+├── base_checkpoints/         # Pretrained model checkpoints (legacy)
+├── chatsft_checkpoints/      # SFT model checkpoints (legacy)
+└── report.json               # Evaluation reports
 ```
 
 ### Checkpoint Format
