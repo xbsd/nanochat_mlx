@@ -90,7 +90,8 @@ def save_checkpoint(
         for name, state_dict in optimizer.state.items():
             for key, val in state_dict.items():
                 if isinstance(val, mx.array):
-                    opt_arrays[f"{name}@@{key}"] = np.array(val)
+                    arr = val.astype(mx.float32) if val.dtype == mx.bfloat16 else val
+                    opt_arrays[f"{name}@@{key}"] = np.array(arr)
         if opt_arrays:
             np.savez(opt_path, **opt_arrays)
         # Also save step count
@@ -209,11 +210,12 @@ def load_model(path, phase=None):
 
     # Load weights
     weights_path = os.path.join(path, "model.safetensors")
-    if os.path.exists(weights_path):
-        model.load_weights(weights_path)
-    else:
-        logger.warning(f"No weights at {weights_path}, using random init")
-        model.init_weights()
+    if not os.path.exists(weights_path):
+        raise FileNotFoundError(
+            f"No model weights found at {weights_path}. "
+            f"Check that the checkpoint path is correct."
+        )
+    model.load_weights(weights_path)
 
     mx.eval(model.parameters())
     return model, config

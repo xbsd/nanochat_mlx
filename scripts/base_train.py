@@ -166,7 +166,7 @@ def get_weight_decay(step, num_iterations, warmdown_iters, base_wd):
 def count_parameters(model):
     """Count total trainable parameters."""
     total = 0
-    for p in model.trainable_parameters():
+    for _, p in nn.utils.tree_flatten(model.trainable_parameters()):
         total += p.size
     return total
 
